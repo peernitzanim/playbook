@@ -1,0 +1,58 @@
+- name: Get infomatoin about theh instances
+  hosts: localhost
+  become: yes
+  vars_files:
+    - secrets.yml
+  tasks:
+   - name: List all EC2 instances
+     amazon.aws.ec2_instance_info:
+        region=us-east-1
+        aws_access_key_id={{ access_key_id }}
+        aws_secret_key={{ secret_access_key }}
+        filters="tag:MyName"="peer"
+     register: result
+
+   - name: Save result to localhost facts
+     set_fact:
+        ec2_instances_info={{ result }}
+
+
+- name: Tags
+  hosts: all
+  become: yes
+
+  tasks:
+   - name: Check if Manager is true
+     fail:
+        msg: "Stopping playbook because managed is not true."
+     when: >
+        item.tags.Managed != true and
+        item.public_ip_address  == inventory_hostname
+     loop: "{{ hostvars['localhost']['ec2_instances_info'].instances }}"
+
+
+   - name : Install packages
+     apt:
+        name={{ item.tags.Service }}={{ item.tags.Version }}
+        state=present
+        update_cache=true
+
+     when: "{{ item.public_ip_address  == inventory_hostname }}"
+     loop: "{{ hostvars['localhost']['ec2_instances_info'].instances }}"
+
+   - name: Set the hostname
+     hostname:
+        name={{ item.tags.Name }}
+     when: "{{ item.public_ip_address  == inventory_hostname }}"
+     loop: "{{ hostvars['localhost']['ec2_instances_info'].instances }}"
+
+   - name: Schedule server restart
+     cron:
+       name: "Scheduled server restart"
+       minute: "{{ item.tags.Restart.split(':')[0] }}"
+       hour: "{{ item.tags.Restart.split(':')[1] }}"
+       weekday: "{{ item.tags.Restart.split(':')[2] }}"
+       job: "/sbin/shutdown -r now"
+       state: present
+      when: "{{ item.public_ip_address  == inventory_hostname }}"
+      loop: "{{ hostvars['localhost']['ec2_instances_info'].instances }}"
